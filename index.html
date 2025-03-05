@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor Cardíaco Mobile</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+        #videoContainer { margin: 20px auto; width: 90%; max-width: 400px; aspect-ratio: 1; background: #000; }
+        #preview { width: 100%; height: 100%; object-fit: cover; }
+        .btn { padding: 15px 30px; margin: 10px; font-size: 16px; border: none; border-radius: 25px; cursor: pointer; }
+        #startBtn { background: #00C853; color: white; }
+        #stopBtn { background: #d50000; color: white; }
+        #error { color: #d50000; margin: 15px; }
+    </style>
+</head>
+<body>
+    <h1>Monitor Cardíaco</h1>
+    <div id="videoContainer">
+        <video id="preview" playsinline></video>
+    </div>
+    <button id="startBtn" class="btn">Iniciar</button>
+    <button id="stopBtn" class="btn" disabled>Parar</button>
+    <div id="error"></div>
+    <div id="result" style="font-size: 24px; margin: 20px;">-- bpm</div>
+
+    <script>
+        const video = document.getElementById('preview');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const errorDiv = document.getElementById('error');
+        
+        let mediaStream;
+        let intervalId;
+        let beats = [];
+
+        async function initCamera() {
+            try {
+                // Etapa 1: Solicitar permissão básica primeiro
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
+
+                // Etapa 2: Tentar ativar a lanterna após permissão concedida
+                const track = mediaStream.getVideoTracks()[0];
+                await track.applyConstraints({
+                    advanced: [{ torch: true }]
+                }).catch(e => {
+                    errorDiv.innerHTML = "Ative a lanterna manualmente!";
+                });
+
+                video.srcObject = mediaStream;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+
+                // Iniciar análise
+                intervalId = setInterval(analyzeHeartRate, 150);
+
+            } catch (error) {
+                handleError(error);
+            }
+        }
+
+        function handleError(error) {
+            console.error('Erro:', error);
+            errorDiv.innerHTML = `
+                Permissão negada!<br>
+                1. Clique no ícone de cadeado na barra de endereço<br>
+                2. Verifique as permissões da câmera<br>
+                3. Recarregue a página
+            `;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        }
+
+        // ... (mantenha as funções analyzeHeartRate, calculateBPM e stopMeasurement do código anterior)
+
+        startBtn.addEventListener('click', initCamera);
+        stopBtn.addEventListener('click', () => {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => {
+                    track.stop();
+                    if (track.readyState === 'live' && track.applyConstraints) {
+                        track.applyConstraints({ advanced: [{ torch: false }] })
+                            .catch(() => {});
+                    }
+                });
+            }
+            clearInterval(intervalId);
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            result.textContent = '-- bpm';
+            beats = [];
+            errorDiv.textContent = '';
+        });
+
+        // Verificação inicial de compatibilidade
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            errorDiv.innerHTML = 'Seu navegador não suporta acesso à câmera!';
+            startBtn.disabled = true;
+        }
+    </script>
+</body>
+</html>
