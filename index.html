@@ -3,9 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Monitor Cardíaco</title>
+    <title>Monitor Cardíaco Completo</title>
     <style>
-        /* Mantido o mesmo estilo anterior */
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f5f5f5; }
+        #videoContainer { margin: 20px auto; width: 90%; max-width: 300px; aspect-ratio: 1; background: #000; border-radius: 15px; overflow: hidden; }
+        #preview { width: 100%; height: 100%; object-fit: cover; }
+        .btn { padding: 12px 25px; margin: 10px; border: none; border-radius: 25px; font-size: 16px; cursor: pointer; transition: 0.3s; }
+        #startBtn { background: #28a745; color: white; }
+        #stopBtn { background: #dc3545; color: white; }
+        #result { font-size: 32px; margin: 20px; font-weight: bold; color: #333; }
+        #status { color: #666; margin: 10px; }
+        #error { color: #dc3545; margin: 15px; }
     </style>
 </head>
 <body>
@@ -16,23 +24,37 @@
     <button id="startBtn" class="btn">Iniciar Medição</button>
     <button id="stopBtn" class="btn" disabled>Parar</button>
     <div id="result">-- bpm</div>
-    <div id="error" style="color: red; margin: 15px;"></div>
+    <div id="status">Aguardando início...</div>
+    <div id="error"></div>
 
     <script>
         const video = document.getElementById('preview');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const result = document.getElementById('result');
+        const status = document.getElementById('status');
         const error = document.getElementById('error');
 
-        let mediaStream;
-        let intervalId;
+        let mediaStream = null;
+        let animationFrame = null;
+        let lastTimestamp = 0;
+        let beats = [];
+        let peaks = [];
+        let processing = false;
+
+        // Configurações ajustáveis
+        const settings = {
+            sampleRate: 30,          // FPS da análise
+            minPeakDistance: 250,    // Distância mínima entre picos (ms)
+            bufferSize: 150,         // Tamanho do buffer de amostras
+            thresholdMultiplier: 0.6 // Sensibilidade de detecção de picos
+        };
 
         async function startMeasurement() {
             try {
-                error.textContent = '';
+                resetState();
+                status.textContent = 'Solicitando acesso à câmera...';
                 
-                // 1. Solicitar acesso básico à câmera primeiro
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         facingMode: 'environment',
@@ -44,65 +66,176 @@
                 video.srcObject = mediaStream;
                 startBtn.disabled = true;
                 stopBtn.disabled = false;
+                status.textContent = 'Acessando câmera...';
 
-                // 2. Tentar ativar a lanterna após acesso concedido
+                // Tentar ativar lanterna
                 const track = mediaStream.getVideoTracks()[0];
                 try {
-                    await track.applyConstraints({
-                        advanced: [{ torch: true }]
-                    });
-                } catch (torchError) {
-                    error.innerHTML = 'Ative a lanterna manualmente!<br>Posicione o dedo sobre a câmera';
+                    await track.applyConstraints({ advanced: [{ torch: true }] });
+                    status.textContent = 'Posicione o dedo na câmera...';
+                } catch {
+                    status.textContent = 'Ative a lanterna manualmente!';
                 }
 
-                // 3. Iniciar análise
-                intervalId = setInterval(analyzeHeartRate, 150);
-
-            } catch (error) {
-                handleError(error);
+                // Iniciar processamento
+                processing = true;
+                processVideo();
+            } catch (err) {
+                handleError(err);
             }
         }
 
-        function handleError(err) {
-            console.error('Erro:', err);
-            error.innerHTML = `
-                Permissão negada!<br>
-                1. Verifique se o site tem acesso à câmera<br>
-                2. Recarregue a página<br>
-                3. Se persistir, reinicie o navegador
-            `;
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
+        function processVideo() {
+            if (!processing) return;
+
+            const now = performance.now();
+            if (now - lastTimestamp >= 1000 / settings.sampleRate) {
+                analyzeHeartRate();
+                lastTimestamp = now;
+            }
+            animationFrame = requestAnimationFrame(processVideo);
         }
 
         function analyzeHeartRate() {
-            // Mantido igual à versão anterior
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            
+            // Calcular intensidade média do canal vermelho
+            let redSum = 0;
+            for (let i = 0; i < data.length; i += 4) {
+                redSum += data[i];
+            }
+            const redValue = redSum / (data.length / 4);
+            
+            // Adicionar ao buffer e processar
+            beats.push(redValue);
+            if (beats.length > settings.bufferSize) beats.shift();
+            
+            if (beats.length >= settings.bufferSize) {
+                const filtered = bandpassFilter(beats);
+                detectPeaks(filtered);
+                updateBPM();
+            }
+        }
+
+        function bandpassFilter(data) {
+            // Filtro passa-banda para frequências cardíacas (0.5-4 Hz)
+            const filtered = [];
+            const dt = 1 / settings.sampleRate;
+            let prev1 = 0, prev2 = 0;
+            
+            // Coeficientes para filtro de 2ª ordem
+            const cutoffLow = 0.5;  // 30 bpm
+            const cutoffHigh = 4.0; // 240 bpm
+            const rcLow = 1 / (2 * Math.PI * cutoffLow);
+            const rcHigh = 1 / (2 * Math.PI * cutoffHigh);
+            const alphaLow = dt / (rcLow + dt);
+            const alphaHigh = rcHigh / (rcHigh + dt);
+
+            for (let i = 0; i < data.length; i++) {
+                // Passa-alta
+                let highpass = alphaHigh * (prev1 + data[i] - (data[i-1] || 0));
+                // Passa-baixa
+                let lowpass = alphaLow * highpass + (1 - alphaLow) * prev2;
+                
+                filtered.push(lowpass);
+                prev1 = data[i];
+                prev2 = lowpass;
+            }
+            return filtered;
+        }
+
+        function detectPeaks(data) {
+            const threshold = calculateThreshold(data);
+            peaks = [];
+            
+            for (let i = 1; i < data.length - 1; i++) {
+                if (data[i] > threshold && 
+                    data[i] > data[i-1] && 
+                    data[i] > data[i+1] &&
+                    (peaks.length === 0 || i - peaks[peaks.length-1] > settings.minPeakDistance / (1000 / settings.sampleRate))
+                {
+                    peaks.push(i);
+                }
+            }
+        }
+
+        function calculateThreshold(data) {
+            const max = Math.max(...data);
+            const min = Math.min(...data);
+            return (max - min) * settings.thresholdMultiplier + min;
+        }
+
+        function updateBPM() {
+            if (peaks.length < 2) {
+                result.textContent = '--';
+                status.textContent = 'Ajuste a posição do dedo...';
+                return;
+            }
+
+            // Calcular intervalos entre picos
+            const intervals = [];
+            for (let i = 1; i < peaks.length; i++) {
+                intervals.push(peaks[i] - peaks[i-1]);
+            }
+
+            // Calcular média dos intervalos
+            const avgInterval = intervals.reduce((a,b) => a + b, 0) / intervals.length;
+            const bpm = (60 * settings.sampleRate) / avgInterval;
+
+            // Suavizar resultado
+            result.textContent = Math.round(bpm) + ' bpm';
+            status.textContent = 'Monitorando...';
+        }
+
+        function resetState() {
+            beats = [];
+            peaks = [];
+            result.textContent = '--';
+            status.textContent = 'Inicializando...';
+            error.textContent = '';
+        }
+
+        function handleError(err) {
+            console.error(err);
+            error.innerHTML = `Erro: ${err.name}<br>${err.message}`;
+            status.textContent = 'Erro na medição';
+            stopMeasurement();
         }
 
         function stopMeasurement() {
+            processing = false;
+            cancelAnimationFrame(animationFrame);
+            
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => {
-                    if (track.readyState === 'live' && track.applyConstraints) {
-                        track.applyConstraints({ advanced: [{ torch: false }] })
-                            .catch(() => {});
-                    }
                     track.stop();
+                    try {
+                        track.applyConstraints({ advanced: [{ torch: false }] });
+                    } catch {}
                 });
             }
-            clearInterval(intervalId);
+            
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            result.textContent = '-- bpm';
             video.srcObject = null;
+            status.textContent = 'Medição parada';
         }
 
-        // Event Listeners
+        // Event listeners
         startBtn.addEventListener('click', startMeasurement);
         stopBtn.addEventListener('click', stopMeasurement);
 
-        // Verificação de compatibilidade
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            error.textContent = 'Seu navegador não suporta acesso à câmera!';
+        // Verificação inicial
+        if (!navigator.mediaDevices?.getUserMedia) {
+            error.textContent = 'Navegador não compatível!';
             startBtn.disabled = true;
         }
     </script>
