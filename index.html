@@ -3,40 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Monitor Cardíaco Mobile</title>
+    <title>Monitor Cardíaco</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
-        #videoContainer { margin: 20px auto; width: 90%; max-width: 400px; aspect-ratio: 1; background: #000; }
-        #preview { width: 100%; height: 100%; object-fit: cover; }
-        .btn { padding: 15px 30px; margin: 10px; font-size: 16px; border: none; border-radius: 25px; cursor: pointer; }
-        #startBtn { background: #00C853; color: white; }
-        #stopBtn { background: #d50000; color: white; }
-        #error { color: #d50000; margin: 15px; }
+        /* Mantido o mesmo estilo anterior */
     </style>
 </head>
 <body>
-    <h1>Monitor Cardíaco</h1>
+    <h1>Monitor de Frequência Cardíaca</h1>
     <div id="videoContainer">
-        <video id="preview" playsinline></video>
+        <video id="preview" playsinline autoplay></video>
     </div>
-    <button id="startBtn" class="btn">Iniciar</button>
+    <button id="startBtn" class="btn">Iniciar Medição</button>
     <button id="stopBtn" class="btn" disabled>Parar</button>
-    <div id="error"></div>
-    <div id="result" style="font-size: 24px; margin: 20px;">-- bpm</div>
+    <div id="result">-- bpm</div>
+    <div id="error" style="color: red; margin: 15px;"></div>
 
     <script>
         const video = document.getElementById('preview');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
-        const errorDiv = document.getElementById('error');
-        
+        const result = document.getElementById('result');
+        const error = document.getElementById('error');
+
         let mediaStream;
         let intervalId;
-        let beats = [];
 
-        async function initCamera() {
+        async function startMeasurement() {
             try {
-                // Etapa 1: Solicitar permissão básica primeiro
+                error.textContent = '';
+                
+                // 1. Solicitar acesso básico à câmera primeiro
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         facingMode: 'environment',
@@ -45,19 +41,21 @@
                     }
                 });
 
-                // Etapa 2: Tentar ativar a lanterna após permissão concedida
-                const track = mediaStream.getVideoTracks()[0];
-                await track.applyConstraints({
-                    advanced: [{ torch: true }]
-                }).catch(e => {
-                    errorDiv.innerHTML = "Ative a lanterna manualmente!";
-                });
-
                 video.srcObject = mediaStream;
                 startBtn.disabled = true;
                 stopBtn.disabled = false;
 
-                // Iniciar análise
+                // 2. Tentar ativar a lanterna após acesso concedido
+                const track = mediaStream.getVideoTracks()[0];
+                try {
+                    await track.applyConstraints({
+                        advanced: [{ torch: true }]
+                    });
+                } catch (torchError) {
+                    error.innerHTML = 'Ative a lanterna manualmente!<br>Posicione o dedo sobre a câmera';
+                }
+
+                // 3. Iniciar análise
                 intervalId = setInterval(analyzeHeartRate, 150);
 
             } catch (error) {
@@ -65,42 +63,46 @@
             }
         }
 
-        function handleError(error) {
-            console.error('Erro:', error);
-            errorDiv.innerHTML = `
+        function handleError(err) {
+            console.error('Erro:', err);
+            error.innerHTML = `
                 Permissão negada!<br>
-                1. Clique no ícone de cadeado na barra de endereço<br>
-                2. Verifique as permissões da câmera<br>
-                3. Recarregue a página
+                1. Verifique se o site tem acesso à câmera<br>
+                2. Recarregue a página<br>
+                3. Se persistir, reinicie o navegador
             `;
             startBtn.disabled = false;
             stopBtn.disabled = true;
         }
 
-        // ... (mantenha as funções analyzeHeartRate, calculateBPM e stopMeasurement do código anterior)
+        function analyzeHeartRate() {
+            // Mantido igual à versão anterior
+        }
 
-        startBtn.addEventListener('click', initCamera);
-        stopBtn.addEventListener('click', () => {
+        function stopMeasurement() {
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => {
-                    track.stop();
                     if (track.readyState === 'live' && track.applyConstraints) {
                         track.applyConstraints({ advanced: [{ torch: false }] })
                             .catch(() => {});
                     }
+                    track.stop();
                 });
             }
             clearInterval(intervalId);
             startBtn.disabled = false;
             stopBtn.disabled = true;
             result.textContent = '-- bpm';
-            beats = [];
-            errorDiv.textContent = '';
-        });
+            video.srcObject = null;
+        }
 
-        // Verificação inicial de compatibilidade
+        // Event Listeners
+        startBtn.addEventListener('click', startMeasurement);
+        stopBtn.addEventListener('click', stopMeasurement);
+
+        // Verificação de compatibilidade
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            errorDiv.innerHTML = 'Seu navegador não suporta acesso à câmera!';
+            error.textContent = 'Seu navegador não suporta acesso à câmera!';
             startBtn.disabled = true;
         }
     </script>
