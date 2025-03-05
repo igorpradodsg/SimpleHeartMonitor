@@ -18,7 +18,6 @@
 </head>
 <body>
   <h1>Monitor de Frequência Cardíaca</h1>
-  <h2>v0.6</h2>
   <div id="videoContainer">
     <video id="preview" playsinline autoplay></video>
   </div>
@@ -42,6 +41,10 @@
     let beats         = [];
     let peaks         = [];
     let processing    = false;
+
+    // Buffer para suavização da medição (média móvel)
+    let bpmBuffer = [];
+    const smoothingBufferSize = 5; // Número de medições anteriores para calcular a média
 
     // Cria um canvas offscreen para reutilização
     const canvas = document.createElement('canvas');
@@ -145,10 +148,10 @@
 
       for (let i = 0; i < data.length; i++) {
         const current = data[i];
-        // Passa-alta
         const prevData = (i > 0) ? data[i-1] : 0;
+        // Filtro passa-alta
         let highpass = alphaHigh * (prev1 + current - prevData);
-        // Passa-baixa
+        // Filtro passa-baixa
         let lowpass = alphaLow * highpass + (1 - alphaLow) * prev2;
         filtered.push(lowpass);
         prev1 = current;
@@ -193,15 +196,21 @@
         intervals.push(peaks[i] - peaks[i - 1]);
       }
       const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-      const bpm = (60 * settings.sampleRate) / avgInterval;
+      const currentBPM = (60 * settings.sampleRate) / avgInterval;
 
-      result.textContent = Math.round(bpm) + ' bpm';
+      // Suavização por média móvel
+      bpmBuffer.push(currentBPM);
+      if (bpmBuffer.length > smoothingBufferSize) bpmBuffer.shift();
+      const smoothedBPM = bpmBuffer.reduce((sum, b) => sum + b, 0) / bpmBuffer.length;
+
+      result.textContent = Math.round(smoothedBPM) + ' bpm';
       status.textContent = 'Monitorando...';
     }
 
     function resetState() {
       beats = [];
       peaks = [];
+      bpmBuffer = [];
       result.textContent = '-- bpm';
       status.textContent = 'Inicializando...';
       error.textContent = '';
