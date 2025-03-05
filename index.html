@@ -12,18 +12,22 @@
     #startBtn { background: #28a745; color: white; }
     #stopBtn { background: #dc3545; color: white; }
     #result { font-size: 32px; margin: 20px; font-weight: bold; color: #333; }
+    #avgDisplay { font-size: 20px; margin: 10px; color: #555; }
     #status { color: #666; margin: 10px; }
     #error { color: #dc3545; margin: 15px; }
   </style>
 </head>
 <body>
   <h1>Monitor de Frequência Cardíaca</h1>
+  <h2>v0.8</h2>
   <div id="videoContainer">
     <video id="preview" playsinline autoplay></video>
   </div>
   <button id="startBtn" class="btn">Iniciar Medição</button>
   <button id="stopBtn" class="btn" disabled>Parar</button>
   <div id="result">-- bpm</div>
+  <!-- Visor com a média dos últimos 3 segundos e timestamp -->
+  <div id="avgDisplay">Média (últimos 3s): -- bpm | Tempo: 0.0 s</div>
   <div id="status">Aguardando início...</div>
   <div id="error"></div>
 
@@ -32,19 +36,21 @@
     const startBtn    = document.getElementById('startBtn');
     const stopBtn     = document.getElementById('stopBtn');
     const result      = document.getElementById('result');
+    const avgDisplay  = document.getElementById('avgDisplay');
     const status      = document.getElementById('status');
     const error       = document.getElementById('error');
 
-    let mediaStream   = null;
-    let animationFrame= null;
-    let lastTimestamp = 0;
-    let beats         = [];
-    let peaks         = [];
-    let processing    = false;
+    let mediaStream     = null;
+    let animationFrame  = null;
+    let lastTimestamp   = 0;
+    let beats           = [];
+    let peaks           = [];
+    let processing      = false;
 
-    // Buffer para suavização da medição (média móvel)
-    let bpmBuffer = [];
-    const smoothingBufferSize = 5; // Número de medições anteriores para calcular a média
+    // Buffers para suavização
+    let bpmRealtimeBuffer = []; // Suavização para monitor em tempo real (curto prazo)
+    let bpmAvgBuffer      = []; // Buffer para média dos últimos 3 segundos
+    let measurementStartTime = null;
 
     // Cria um canvas offscreen para reutilização
     const canvas = document.createElement('canvas');
@@ -54,7 +60,7 @@
     const settings = {
       sampleRate: 30,          // FPS da análise
       minPeakDistance: 250,    // Distância mínima entre picos (ms)
-      bufferSize: 150,         // Tamanho do buffer de amostras
+      bufferSize: 150,         // Tamanho do buffer de amostras para análise
       thresholdMultiplier: 0.6 // Sensibilidade de detecção de picos
     };
 
@@ -76,7 +82,7 @@
         stopBtn.disabled = false;
         status.textContent = 'Acessando câmera...';
 
-        // Ativar lanterna, se suportado
+        // Tenta ativar a lanterna
         const track = mediaStream.getVideoTracks()[0];
         try {
           await track.applyConstraints({ advanced: [{ torch: true }] });
@@ -85,11 +91,12 @@
           status.textContent = 'Ative a lanterna manualmente!';
         }
 
-        // Aguarda os metadados do vídeo para ter as dimensões
+        // Aguarda os metadados do vídeo para definir as dimensões do canvas
         video.onloadedmetadata = () => {
           canvas.width  = video.videoWidth;
           canvas.height = video.videoHeight;
           processing = true;
+          measurementStartTime = performance.now();
           processVideo();
         };
       } catch (err) {
@@ -108,7 +115,6 @@
     }
 
     function analyzeHeartRate() {
-      // Verifica se as dimensões do vídeo estão disponíveis
       if (!video.videoWidth || !video.videoHeight) return;
 
       // Desenha o frame atual no canvas reutilizado
@@ -148,7 +154,7 @@
 
       for (let i = 0; i < data.length; i++) {
         const current = data[i];
-        const prevData = (i > 0) ? data[i-1] : 0;
+        const prevData = (i > 0) ? data[i - 1] : 0;
         // Filtro passa-alta
         let highpass = alphaHigh * (prev1 + current - prevData);
         // Filtro passa-baixa
@@ -185,7 +191,7 @@
 
     function updateBPM() {
       if (peaks.length < 2) {
-        result.textContent = '--';
+        result.textContent = '-- bpm';
         status.textContent = 'Ajuste a posição do dedo...';
         return;
       }
@@ -198,20 +204,35 @@
       const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
       const currentBPM = (60 * settings.sampleRate) / avgInterval;
 
-      // Suavização por média móvel
-      bpmBuffer.push(currentBPM);
-      if (bpmBuffer.length > smoothingBufferSize) bpmBuffer.shift();
-      const smoothedBPM = bpmBuffer.reduce((sum, b) => sum + b, 0) / bpmBuffer.length;
+      // Suavização para monitor em tempo real (usando os últimos 5 valores)
+      bpmRealtimeBuffer.push(currentBPM);
+      if (bpmRealtimeBuffer.length > 5) bpmRealtimeBuffer.shift();
+      const realtimeBPM = bpmRealtimeBuffer.reduce((a, b) => a + b, 0) / bpmRealtimeBuffer.length;
+      result.textContent = Math.round(realtimeBPM) + ' bpm';
 
-      result.textContent = Math.round(smoothedBPM) + ' bpm';
+      // Atualiza a média dos últimos 3 segundos com timestamp dinâmico
+      const now = performance.now();
+      // Armazena o valor com o timestamp atual
+      bpmAvgBuffer.push({ bpm: currentBPM, time: now });
+      // Remove medições com mais de 3000ms
+      while (bpmAvgBuffer.length && (now - bpmAvgBuffer[0].time) > 3000) {
+        bpmAvgBuffer.shift();
+      }
+      const avgBPM = bpmAvgBuffer.reduce((sum, item) => sum + item.bpm, 0) / bpmAvgBuffer.length;
+      const elapsedSeconds = ((now - measurementStartTime) / 1000).toFixed(1);
+      avgDisplay.textContent = `Média (últimos 3s): ${Math.round(avgBPM)} bpm | Tempo: ${elapsedSeconds} s`;
+
       status.textContent = 'Monitorando...';
     }
 
     function resetState() {
       beats = [];
       peaks = [];
-      bpmBuffer = [];
+      bpmRealtimeBuffer = [];
+      bpmAvgBuffer = [];
+      measurementStartTime = null;
       result.textContent = '-- bpm';
+      avgDisplay.textContent = 'Média (últimos 3s): -- bpm | Tempo: 0.0 s';
       status.textContent = 'Inicializando...';
       error.textContent = '';
     }
