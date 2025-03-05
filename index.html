@@ -19,7 +19,6 @@
 </head>
 <body>
   <h1>Monitor de Frequência Cardíaca</h1>
-  <h2>v0.8</h2>
   <div id="videoContainer">
     <video id="preview" playsinline autoplay></video>
   </div>
@@ -48,7 +47,7 @@
     let processing      = false;
 
     // Buffers para suavização
-    let bpmRealtimeBuffer = []; // Suavização para monitor em tempo real (curto prazo)
+    let bpmRealtimeBuffer = []; // Suavização de curto prazo (últimos 5 valores)
     let bpmAvgBuffer      = []; // Buffer para média dos últimos 3 segundos
     let measurementStartTime = null;
 
@@ -61,7 +60,8 @@
       sampleRate: 30,          // FPS da análise
       minPeakDistance: 250,    // Distância mínima entre picos (ms)
       bufferSize: 150,         // Tamanho do buffer de amostras para análise
-      thresholdMultiplier: 0.6 // Sensibilidade de detecção de picos
+      thresholdMultiplier: 0.6, // Sensibilidade de detecção de picos
+      bpmOffset: 25            // Offset (em bpm) para compensar a discrepância
     };
 
     async function startMeasurement() {
@@ -154,7 +154,7 @@
 
       for (let i = 0; i < data.length; i++) {
         const current = data[i];
-        const prevData = (i > 0) ? data[i - 1] : 0;
+        const prevData = (i > 0) ? data[i-1] : 0;
         // Filtro passa-alta
         let highpass = alphaHigh * (prev1 + current - prevData);
         // Filtro passa-baixa
@@ -202,18 +202,20 @@
         intervals.push(peaks[i] - peaks[i - 1]);
       }
       const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-      const currentBPM = (60 * settings.sampleRate) / avgInterval;
+      // BPM "cru" calculado a partir dos intervalos
+      const rawBPM = (60 * settings.sampleRate) / avgInterval;
+      // Aplica a compensação (offset)
+      const adjustedBPM = Math.max(rawBPM - settings.bpmOffset, 0);
 
-      // Suavização para monitor em tempo real (usando os últimos 5 valores)
-      bpmRealtimeBuffer.push(currentBPM);
+      // Suavização para monitor em tempo real (últimos 5 valores)
+      bpmRealtimeBuffer.push(adjustedBPM);
       if (bpmRealtimeBuffer.length > 5) bpmRealtimeBuffer.shift();
       const realtimeBPM = bpmRealtimeBuffer.reduce((a, b) => a + b, 0) / bpmRealtimeBuffer.length;
       result.textContent = Math.round(realtimeBPM) + ' bpm';
 
       // Atualiza a média dos últimos 3 segundos com timestamp dinâmico
       const now = performance.now();
-      // Armazena o valor com o timestamp atual
-      bpmAvgBuffer.push({ bpm: currentBPM, time: now });
+      bpmAvgBuffer.push({ bpm: adjustedBPM, time: now });
       // Remove medições com mais de 3000ms
       while (bpmAvgBuffer.length && (now - bpmAvgBuffer[0].time) > 3000) {
         bpmAvgBuffer.shift();
