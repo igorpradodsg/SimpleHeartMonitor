@@ -3,31 +3,42 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Monitor Cardíaco Completo</title>
+  <title>Monitor Cardíaco Simples</title>
   <style>
     body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f5f5f5; }
     #videoContainer { margin: 20px auto; width: 90%; max-width: 300px; aspect-ratio: 1; background: #000; border-radius: 15px; overflow: hidden; }
     #preview { width: 100%; height: 100%; object-fit: cover; }
-    .btn { padding: 12px 25px; margin: 10px; border: none; border-radius: 25px; font-size: 16px; cursor: pointer; transition: 0.3s; }
+    .btn { padding: 12px 25px; margin: 10px 5px; border: none; border-radius: 25px; font-size: 16px; cursor: pointer; transition: 0.3s; }
     #startBtn { background: #28a745; color: white; }
     #stopBtn { background: #dc3545; color: white; }
+    .samplingBtn { background: #007bff; color: white; }
     #result { font-size: 32px; margin: 20px; font-weight: bold; color: #333; }
     #avgDisplay { font-size: 20px; margin: 10px; color: #555; }
     #status { color: #666; margin: 10px; }
     #error { color: #dc3545; margin: 15px; }
+    #samplingContainer { margin: 15px 0; }
   </style>
 </head>
 <body>
   <h1>Monitor de Frequência Cardíaca</h1>
-  <h2>v0.9</h2>
+  <h2>v0.11</h2>
   <div id="videoContainer">
     <video id="preview" playsinline autoplay></video>
   </div>
   <button id="startBtn" class="btn">Iniciar Medição</button>
   <button id="stopBtn" class="btn" disabled>Parar</button>
   <div id="result">-- bpm</div>
-  <!-- Visor com a média dos últimos 3 segundos e timestamp -->
+  <!-- Visor com a média e timestamp -->
   <div id="avgDisplay">Média (últimos 3s): -- bpm | Tempo: 0.0 s</div>
+  
+  <!-- Botões para seleção da janela de amostragem -->
+  <div id="samplingContainer">
+    <span>Selecione a janela de média:</span>
+    <button id="sample5" class="btn samplingBtn">5 s</button>
+    <button id="sample10" class="btn samplingBtn">10 s</button>
+    <button id="sample15" class="btn samplingBtn">15 s</button>
+  </div>
+  
   <div id="status">Aguardando início...</div>
   <div id="error"></div>
 
@@ -39,6 +50,9 @@
     const avgDisplay  = document.getElementById('avgDisplay');
     const status      = document.getElementById('status');
     const error       = document.getElementById('error');
+    const sample5Btn  = document.getElementById('sample5');
+    const sample10Btn = document.getElementById('sample10');
+    const sample15Btn = document.getElementById('sample15');
 
     let mediaStream     = null;
     let animationFrame  = null;
@@ -49,8 +63,11 @@
 
     // Buffers para suavização
     let bpmRealtimeBuffer = []; // Suavização de curto prazo (últimos 5 valores)
-    let bpmAvgBuffer      = []; // Buffer para média dos últimos 3 segundos
+    let bpmAvgBuffer      = []; // Buffer para média (janela selecionada)
     let measurementStartTime = null;
+
+    // Janela de amostragem para média (em milissegundos)
+    let sampleWindow = 3000; // valor padrão: 3 segundos
 
     // Cria um canvas offscreen para reutilização
     const canvas = document.createElement('canvas');
@@ -64,6 +81,30 @@
       thresholdMultiplier: 0.6, // Sensibilidade de detecção de picos
       bpmOffset: 25            // Offset (em bpm) para compensar a discrepância
     };
+
+    // Atualiza o visual dos botões de amostragem
+    function updateSamplingButtons() {
+      // Remove classe "active" de todos os botões
+      [sample5Btn, sample10Btn, sample15Btn].forEach(btn => btn.classList.remove('active'));
+      // Adiciona classe "active" ao botão correspondente
+      if (sampleWindow === 5000) sample5Btn.classList.add('active');
+      else if (sampleWindow === 10000) sample10Btn.classList.add('active');
+      else if (sampleWindow === 15000) sample15Btn.classList.add('active');
+    }
+
+    // Event listeners para os botões de amostragem
+    sample5Btn.addEventListener('click', () => {
+      sampleWindow = 5000;
+      updateSamplingButtons();
+    });
+    sample10Btn.addEventListener('click', () => {
+      sampleWindow = 10000;
+      updateSamplingButtons();
+    });
+    sample15Btn.addEventListener('click', () => {
+      sampleWindow = 15000;
+      updateSamplingButtons();
+    });
 
     async function startMeasurement() {
       try {
@@ -214,16 +255,16 @@
       const realtimeBPM = bpmRealtimeBuffer.reduce((a, b) => a + b, 0) / bpmRealtimeBuffer.length;
       result.textContent = Math.round(realtimeBPM) + ' bpm';
 
-      // Atualiza a média dos últimos 3 segundos com timestamp dinâmico
+      // Atualiza o buffer de média conforme a janela selecionada
       const now = performance.now();
       bpmAvgBuffer.push({ bpm: adjustedBPM, time: now });
-      // Remove medições com mais de 3000ms
-      while (bpmAvgBuffer.length && (now - bpmAvgBuffer[0].time) > 3000) {
+      // Remove medições com mais de sampleWindow ms
+      while (bpmAvgBuffer.length && (now - bpmAvgBuffer[0].time) > sampleWindow) {
         bpmAvgBuffer.shift();
       }
       const avgBPM = bpmAvgBuffer.reduce((sum, item) => sum + item.bpm, 0) / bpmAvgBuffer.length;
       const elapsedSeconds = ((now - measurementStartTime) / 1000).toFixed(1);
-      avgDisplay.textContent = `Média (últimos 3s): ${Math.round(avgBPM)} bpm | Tempo: ${elapsedSeconds} s`;
+      avgDisplay.textContent = `Média (últimos ${sampleWindow/1000}s): ${Math.round(avgBPM)} bpm | Tempo: ${elapsedSeconds} s`;
 
       status.textContent = 'Monitorando...';
     }
@@ -235,7 +276,7 @@
       bpmAvgBuffer = [];
       measurementStartTime = null;
       result.textContent = '-- bpm';
-      avgDisplay.textContent = 'Média (últimos 3s): -- bpm | Tempo: 0.0 s';
+      avgDisplay.textContent = `Média (últimos ${sampleWindow/1000}s): -- bpm | Tempo: 0.0 s`;
       status.textContent = 'Inicializando...';
       error.textContent = '';
     }
@@ -273,6 +314,10 @@
       error.textContent = 'Navegador não compatível!';
       startBtn.disabled = true;
     }
+
+    // Define o botão ativo inicial (3s padrão)
+    sampleWindow = 3000;
+    updateSamplingButtons();
   </script>
 </body>
 </html>
